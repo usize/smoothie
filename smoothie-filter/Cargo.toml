@@ -1,0 +1,21 @@
+[package]
+name = "smoothie-filter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[package.metadata.praxis-filters]
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+bytes = { workspace = true }
+dashmap = { workspace = true }
+praxis-filter = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }

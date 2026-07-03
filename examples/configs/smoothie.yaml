@@ -1,0 +1,37 @@
+# Smoothie: Latency-Floor Concurrency Controller
+#
+# Proxies LLM traffic through Praxis with Smoothie's AIMD-based
+# concurrency controller. Caps concurrent decode streams to maintain
+# a per-stream token rate floor.
+#
+# Usage:
+#   cargo run -p smoothie-server -- -c examples/configs/smoothie.yaml
+
+listeners:
+  - address: "0.0.0.0:8080"
+    protocol: http
+    routes:
+      - paths:
+          - path: /
+            match: prefix
+        clusters:
+          - name: llm_backend
+
+clusters:
+  - name: llm_backend
+    endpoints:
+      - address: "127.0.0.1:8000"
+
+filter_chains:
+  - filters:
+      - type: smoothie
+        config:
+          floor_tps: 10.0
+          headroom_ms: 15
+          beta: 0.8
+          ewma_alpha: 0.3
+          hysteresis_steps: 3
+          ceiling_min: 1
+          ceiling_max: 64
+          cb_consecutive_failures: 5
+          cb_recovery_window_secs: 30
