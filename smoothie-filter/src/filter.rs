@@ -44,7 +44,11 @@ impl SmoothieFilter {
         })?;
 
         let floor_ms = cfg.floor_ms();
-        let initial_ceiling = cfg.ceiling_init.unwrap_or(cfg.ceiling_max);
+        // Derivative mode starts at ceiling_min (probes upward).
+        // Fixed-floor mode starts at ceiling_max (decreases toward equilibrium).
+        let initial_ceiling = cfg
+            .ceiling_init
+            .unwrap_or(if floor_ms.is_none() { cfg.ceiling_min } else { cfg.ceiling_max });
 
         let aimd_config = AimdConfig {
             floor_ms,
@@ -53,6 +57,7 @@ impl SmoothieFilter {
             hysteresis_steps: cfg.hysteresis_steps,
             ceiling_min: cfg.ceiling_min,
             ceiling_max: cfg.ceiling_max,
+            sensitivity: cfg.sensitivity,
         };
 
         Ok(Box::new(Self {
@@ -189,7 +194,7 @@ impl HttpFilter for SmoothieFilter {
                 if should_observe_aimd {
                     let max_itl = self.max_smoothed_itl();
                     if max_itl > 0.0 {
-                        self.aimd.observe(max_itl);
+                        self.aimd.observe(max_itl, self.semaphore.active());
                     }
                 }
             }
@@ -202,7 +207,7 @@ impl HttpFilter for SmoothieFilter {
                 // Guard dropped here — safe to iterate the map.
                 let max_itl = self.max_smoothed_itl();
                 if max_itl > 0.0 {
-                    self.aimd.observe(max_itl);
+                    self.aimd.observe(max_itl, self.semaphore.active());
                 }
             }
 

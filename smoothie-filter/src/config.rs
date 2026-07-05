@@ -5,8 +5,15 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub struct SmoothieConfig {
     /// Per-stream decode-rate floor in tokens per second.
-    #[serde(default = "default_floor_tps")]
-    pub floor_tps: f64,
+    /// When `None`, the controller uses derivative-based crossover detection
+    /// instead of a fixed floor.
+    #[serde(default)]
+    pub floor_tps: Option<f64>,
+
+    /// Fractional ITL increase that triggers multiplicative decrease in
+    /// derivative mode. Must be in the open interval (0, 1).
+    #[serde(default = "default_sensitivity")]
+    pub sensitivity: f64,
 
     /// Slack below the floor (in ms) before additive increase.
     #[serde(default = "default_headroom_ms")]
@@ -46,14 +53,20 @@ pub struct SmoothieConfig {
 
 impl SmoothieConfig {
     /// Derived inter-token latency floor in milliseconds.
-    pub fn floor_ms(&self) -> f64 {
-        1000.0 / self.floor_tps
+    /// Returns `None` when derivative mode is active (no fixed floor).
+    pub fn floor_ms(&self) -> Option<f64> {
+        self.floor_tps.map(|tps| 1000.0 / tps)
     }
 
     /// Validate all config invariants. Returns an error message on failure.
     pub fn validate(&self) -> Result<(), String> {
-        if !self.floor_tps.is_finite() || self.floor_tps <= 0.0 {
-            return Err("floor_tps must be a finite number greater than 0".into());
+        if let Some(tps) = self.floor_tps {
+            if !tps.is_finite() || tps <= 0.0 {
+                return Err("floor_tps must be a finite number greater than 0".into());
+            }
+        }
+        if !self.sensitivity.is_finite() || self.sensitivity <= 0.0 || self.sensitivity >= 1.0 {
+            return Err("sensitivity must be in the open interval (0, 1)".into());
         }
         if !self.beta.is_finite() || self.beta <= 0.0 || self.beta >= 1.0 {
             return Err("beta must be in the open interval (0, 1)".into());
@@ -81,8 +94,8 @@ impl SmoothieConfig {
     }
 }
 
-fn default_floor_tps() -> f64 {
-    10.0
+fn default_sensitivity() -> f64 {
+    0.10
 }
 fn default_headroom_ms() -> u64 {
     15
@@ -124,30 +137,52 @@ mod tests {
     }
 
     #[test]
-    fn floor_ms_derivation() {
+    fn default_floor_tps_is_none() {
         let cfg = default_config();
+        assert!(cfg.floor_tps.is_none());
+        assert!(cfg.floor_ms().is_none());
+    }
+
+    #[test]
+    fn floor_ms_derivation() {
+        let yaml = "floor_tps: 10.0\n";
+        let cfg: SmoothieConfig = serde_yaml::from_str(yaml).unwrap();
         let expected = 100.0; // 1000 / 10
-        assert!((cfg.floor_ms() - expected).abs() < f64::EPSILON);
+        assert!((cfg.floor_ms().unwrap() - expected).abs() < f64::EPSILON);
     }
 
     #[test]
     fn rejects_zero_floor_tps() {
         let mut cfg = default_config();
-        cfg.floor_tps = 0.0;
+        cfg.floor_tps = Some(0.0);
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn rejects_negative_floor_tps() {
         let mut cfg = default_config();
-        cfg.floor_tps = -1.0;
+        cfg.floor_tps = Some(-1.0);
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn rejects_infinite_floor_tps() {
         let mut cfg = default_config();
-        cfg.floor_tps = f64::INFINITY;
+        cfg.floor_tps = Some(f64::INFINITY);
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_sensitivity_zero() {
+        let mut cfg = default_config();
+        cfg.sensitivity = 0.0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_sensitivity_one() {
+        let mut cfg = default_config();
+        cfg.sensitivity = 1.0;
         assert!(cfg.validate().is_err());
     }
 
@@ -220,7 +255,7 @@ mod tests {
     fn deserializes_partial_yaml() {
         let yaml = "floor_tps: 20.0\nbeta: 0.5\n";
         let cfg: SmoothieConfig = serde_yaml::from_str(yaml).unwrap();
-        assert!((cfg.floor_tps - 20.0).abs() < f64::EPSILON);
+        assert!((cfg.floor_tps.unwrap() - 20.0).abs() < f64::EPSILON);
         assert!((cfg.beta - 0.5).abs() < f64::EPSILON);
         // Rest should be defaults
         assert_eq!(cfg.headroom_ms, 15);

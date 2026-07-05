@@ -45,7 +45,6 @@ impl AdaptiveSemaphore {
     }
 
     /// Current number of active streams (used for observability and tests).
-    #[allow(dead_code)]
     pub fn active(&self) -> u32 {
         self.active.load(Ordering::Relaxed)
     }
