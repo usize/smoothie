@@ -73,16 +73,31 @@ impl SmoothieFilter {
         }))
     }
 
-    /// Compute the maximum smoothed ITL across all active streams.
-    fn max_smoothed_itl(&self) -> f64 {
-        let mut max_itl = 0.0_f64;
-        for entry in &self.streams {
-            let itl = entry.value().smoothed_itl_ms();
-            if itl > max_itl {
-                max_itl = itl;
-            }
+    /// Compute the median smoothed ITL across all active streams.
+    ///
+    /// Using the median (p50) instead of the max makes the control signal
+    /// robust to single-stream outliers (prefill spikes, scheduling jitter)
+    /// while remaining sensitive to batch-wide ITL shifts at the capacity
+    /// cliff.
+    fn median_smoothed_itl(&self) -> f64 {
+        let mut itls: Vec<f64> = self
+            .streams
+            .iter()
+            .map(|entry| entry.value().smoothed_itl_ms())
+            .filter(|&itl| itl > 0.0)
+            .collect();
+
+        if itls.is_empty() {
+            return 0.0;
         }
-        max_itl
+
+        itls.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mid = itls.len() / 2;
+        if itls.len() % 2 == 0 {
+            (itls[mid - 1] + itls[mid]) / 2.0
+        } else {
+            itls[mid]
+        }
     }
 }
 
@@ -175,7 +190,7 @@ impl HttpFilter for SmoothieFilter {
 
             // Process token observations.
             // NOTE: We must drop the DashMap guard before calling
-            // max_smoothed_itl(), which iterates the map. Holding a
+            // median_smoothed_itl(), which iterates the map. Holding a
             // get_mut write-lock while iterating would deadlock on
             // the same shard.
             let mut should_observe_aimd = false;
@@ -192,7 +207,7 @@ impl HttpFilter for SmoothieFilter {
                 }
                 // Guard dropped here.
                 if should_observe_aimd {
-                    let max_itl = self.max_smoothed_itl();
+                    let max_itl = self.median_smoothed_itl();
                     if max_itl > 0.0 {
                         self.aimd.observe(max_itl, self.semaphore.active());
                     }
@@ -205,7 +220,7 @@ impl HttpFilter for SmoothieFilter {
                     tracker.apply_terminal_correction(timing_ms);
                 }
                 // Guard dropped here — safe to iterate the map.
-                let max_itl = self.max_smoothed_itl();
+                let max_itl = self.median_smoothed_itl();
                 if max_itl > 0.0 {
                     self.aimd.observe(max_itl, self.semaphore.active());
                 }

@@ -22,13 +22,16 @@ filter_chains:
             cluster: llm_backend
 
       - filter: smoothie
+        floor_tps: 12.0
+        headroom_ms: 10
         ceiling_max: 64
-        ceiling_init: 16
-        beta: 0.5
+        ceiling_init: 8
+        beta: 0.8
+        hysteresis_steps: 200
 
       - filter: load_balancer
         clusters:
           - name: llm_backend
             read_timeout_ms: 120000
             endpoints:
-              - "127.0.0.1:8999"
+              - "127.0.0.1:8085"

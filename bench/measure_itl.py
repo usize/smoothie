@@ -18,7 +18,7 @@ import time
 import aiohttp
 
 URL = "http://127.0.0.1:8085"
-MODEL = "qwen2.5:3b"
+MODEL = "qwen3:8b"
 PROMPT = "Count from 1 to 100, one number per line."
 MAX_TOKENS = 60
 SETTLE_SECS = 5
@@ -74,7 +74,7 @@ async def measure_itl(
                         if not choices:
                             continue
                         delta = choices[0].get("delta", {})
-                        if not delta.get("content"):
+                        if not delta.get("content") and not delta.get("reasoning_content"):
                             continue
 
                         now = time.monotonic()
