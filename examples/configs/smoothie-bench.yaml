@@ -1,0 +1,34 @@
+# Smoothie Benchmark Config
+#
+# Starts at a high ceiling and lets AIMD adjust downward to find
+# the operating point where per-stream decode stays above floor.
+# Use with bench/run.py and llama-server --parallel 100.
+#
+# Usage:
+#   cargo run --release -p smoothie-server -- -c examples/configs/smoothie-bench.yaml
+
+listeners:
+  - name: default
+    address: "0.0.0.0:8081"
+    filter_chains:
+      - smoothie-pipeline
+
+filter_chains:
+  - name: smoothie-pipeline
+    filters:
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: llm_backend
+
+      - filter: smoothie
+        ceiling_max: 64
+        ceiling_init: 16
+        beta: 0.5
+
+      - filter: load_balancer
+        clusters:
+          - name: llm_backend
+            read_timeout_ms: 120000
+            endpoints:
+              - "127.0.0.1:8999"

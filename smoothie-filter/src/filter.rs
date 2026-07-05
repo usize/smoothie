@@ -169,51 +169,59 @@ impl HttpFilter for SmoothieFilter {
             let result = state.sse.feed(chunk);
 
             // Process token observations.
-            if result.new_tokens > 0
-                && let Some(mut tracker) = self.streams.get_mut(&stream_id) {
+            // NOTE: We must drop the DashMap guard before calling
+            // max_smoothed_itl(), which iterates the map. Holding a
+            // get_mut write-lock while iterating would deadlock on
+            // the same shard.
+            let mut should_observe_aimd = false;
+            if result.new_tokens > 0 {
+                if let Some(mut tracker) = self.streams.get_mut(&stream_id) {
                     if !state.sse.first_token_seen() || state.sse.token_count() <= 1 {
-                        // This was the first token — seed the tracker.
                         tracker.record_first_token(now);
                     } else {
-                        // Subsequent tokens — update EWMA.
-                        // For multiple tokens in one chunk, record them all
-                        // at the same timestamp (approximation).
                         for _ in 0..result.new_tokens {
                             tracker.record_token(now);
                         }
-
-                        // Run the AIMD controller with the max ITL signal.
-                        let max_itl = self.max_smoothed_itl();
-                        if max_itl > 0.0 {
-                            self.aimd.observe(max_itl);
-                        }
+                        should_observe_aimd = true;
                     }
                 }
-
-            // Apply terminal timing correction if available.
-            if let Some(timing_ms) = result.terminal_timing_ms
-                && let Some(mut tracker) = self.streams.get_mut(&stream_id) {
-                    tracker.apply_terminal_correction(timing_ms);
-
-                    // Run one final AIMD observation with the corrected value.
+                // Guard dropped here.
+                if should_observe_aimd {
                     let max_itl = self.max_smoothed_itl();
                     if max_itl > 0.0 {
                         self.aimd.observe(max_itl);
                     }
                 }
+            }
+
+            // Apply terminal timing correction if available.
+            if let Some(timing_ms) = result.terminal_timing_ms {
+                if let Some(mut tracker) = self.streams.get_mut(&stream_id) {
+                    tracker.apply_terminal_correction(timing_ms);
+                }
+                // Guard dropped here — safe to iterate the map.
+                let max_itl = self.max_smoothed_itl();
+                if max_itl > 0.0 {
+                    self.aimd.observe(max_itl);
+                }
+            }
 
             // Stream is done — clean up.
             if result.stream_done {
-                self.streams.remove(&stream_id);
-                self.semaphore.release();
+                if self.streams.remove(&stream_id).is_some() {
+                    self.semaphore.release();
+                }
                 return Ok(FilterAction::BodyDone);
             }
         }
 
         // If end_of_stream without SSE done marker, clean up anyway.
+        // Guard on remove() to prevent double-release (BodyDone is
+        // not persisted across Pingora body filter invocations).
         if end_of_stream {
-            self.streams.remove(&stream_id);
-            self.semaphore.release();
+            if self.streams.remove(&stream_id).is_some() {
+                self.semaphore.release();
+            }
             return Ok(FilterAction::BodyDone);
         }
 
