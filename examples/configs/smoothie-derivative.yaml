@@ -1,0 +1,37 @@
+# Smoothie Derivative Mode Config
+#
+# No floor_tps — uses derivative-based crossover detection to
+# automatically discover the compute-memory roofline boundary.
+# Starts at ceiling_min and probes upward until ITL increases.
+#
+# Usage:
+#   cargo run --release -p smoothie-server -- -c examples/configs/smoothie-derivative.yaml
+
+listeners:
+  - name: default
+    address: "0.0.0.0:8081"
+    filter_chains:
+      - smoothie-pipeline
+
+filter_chains:
+  - name: smoothie-pipeline
+    filters:
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: llm_backend
+
+      - filter: smoothie
+        ceiling_min: 1
+        ceiling_max: 128
+        sensitivity: 0.10
+        beta: 0.5
+        hysteresis_steps: 3
+        ewma_alpha: 0.3
+
+      - filter: load_balancer
+        clusters:
+          - name: llm_backend
+            read_timeout_ms: 120000
+            endpoints:
+              - "127.0.0.1:8999"
