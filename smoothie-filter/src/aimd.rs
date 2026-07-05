@@ -27,7 +27,7 @@ enum ProbePhase {
     WaitingForSaturation,
     /// Accumulating baseline ITL observations at the current ceiling.
     Settling,
-    /// Ceiling raised by 1 — accumulating observations to compare against baseline.
+    /// Ceiling raised by probe step — accumulating observations to compare against baseline.
     Measuring,
 }
 
@@ -159,7 +159,9 @@ impl AimdController {
     /// Derivative-based crossover detection probe cycle.
     ///
     /// Discovers the compute-memory crossover point by probing: increase the
-    /// ceiling by 1, observe if ITL increased, and decide accordingly.
+    /// ceiling proportionally, observe if ITL increased, and decide accordingly.
+    /// The probe step is `max(1, ceil(ceiling × sensitivity))` so the expected
+    /// ITL change at the crossover always exceeds the detection threshold.
     fn observe_derivative(
         &self,
         inner: &mut AimdInner,
@@ -192,8 +194,17 @@ impl AimdController {
                     inner.phase_observation_count = 0;
                     inner.phase_itl_sum = 0.0;
 
-                    // Probe: additive increase by 1.
-                    let new_ceiling = (ceiling + 1).min(self.config.ceiling_max);
+                    // Probe: proportional increase — step scales with ceiling
+                    // so the expected ITL signal matches the sensitivity threshold.
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        clippy::cast_precision_loss
+                    )]
+                    let probe_step =
+                        (f64::from(ceiling) * self.config.sensitivity).ceil() as u32;
+                    let probe_step = probe_step.max(1);
+                    let new_ceiling = (ceiling + probe_step).min(self.config.ceiling_max);
                     if new_ceiling == ceiling {
                         // Already at max — can't probe higher. Stay settled.
                         inner.probe_phase = ProbePhase::WaitingForSaturation;
@@ -463,10 +474,11 @@ mod tests {
 
     #[test]
     fn derivative_clamps_to_ceiling_max() {
+        // At ceiling=19, probe_step = ceil(19 * 0.10) = 2 → 19+2=21, clamped to 20.
         let ctrl = AimdController::new(derivative_config(), 19);
         let active = 19;
 
-        // Settling → probe from 19 to 20 (max).
+        // Settling → probe from 19 to 20 (clamped from 21).
         for _ in 0..3 {
             ctrl.observe(50.0, active);
         }
@@ -478,8 +490,8 @@ mod tests {
         }
         assert_eq!(ctrl.ceiling(), 20);
 
-        // Next settling: already at max → cannot probe higher.
-        // Should go to WaitingForSaturation.
+        // Next settling at 20: probe_step = ceil(20 * 0.10) = 2 → 22 > max.
+        // Can't probe → WaitingForSaturation.
         for _ in 0..3 {
             ctrl.observe(50.0, active);
         }
@@ -530,6 +542,57 @@ mod tests {
             ctrl.observe(50.0, 2);
         }
         assert_eq!(ctrl.ceiling(), 6, "should stay put while unsaturated");
+    }
+
+    #[test]
+    fn derivative_proportional_probe_step() {
+        // With ceiling_max=100, the probe step should scale with ceiling.
+        let mut cfg = derivative_config();
+        cfg.ceiling_max = 100;
+        cfg.sensitivity = 0.10;
+        let ctrl = AimdController::new(cfg, 20);
+
+        // At ceiling=20, probe_step = ceil(20 * 0.10) = 2 → probes to 22.
+        for _ in 0..3 {
+            ctrl.observe(50.0, ctrl.ceiling());
+        }
+        assert_eq!(ctrl.ceiling(), 22, "should probe by 2 at ceiling=20");
+
+        // Accept: measuring shows same ITL → keep 22.
+        for _ in 0..3 {
+            ctrl.observe(50.0, ctrl.ceiling());
+        }
+        assert_eq!(ctrl.ceiling(), 22);
+
+        // Next settle at 22: probe_step = ceil(22 * 0.10) = 3 → probes to 25.
+        for _ in 0..3 {
+            ctrl.observe(50.0, ctrl.ceiling());
+        }
+        assert_eq!(ctrl.ceiling(), 25, "should probe by 3 at ceiling=22");
+    }
+
+    #[test]
+    fn derivative_proportional_probe_detects_crossover() {
+        // Verify that proportional probing detects crossover at high B.
+        let mut cfg = derivative_config();
+        cfg.ceiling_max = 100;
+        cfg.sensitivity = 0.10;
+        cfg.beta = 0.5;
+        let ctrl = AimdController::new(cfg, 50);
+
+        // Settle at ceiling=50 with ITL=100ms.
+        for _ in 0..3 {
+            ctrl.observe(100.0, ctrl.ceiling());
+        }
+        // probe_step = ceil(50 * 0.10) = 5 → probes to 55.
+        assert_eq!(ctrl.ceiling(), 55, "should probe by 5 at ceiling=50");
+
+        // Measuring: ITL jumps to 115ms (15% increase > 10% sensitivity).
+        for _ in 0..3 {
+            ctrl.observe(115.0, ctrl.ceiling());
+        }
+        // Crossed over → 55 * 0.5 = 27.
+        assert_eq!(ctrl.ceiling(), 27, "should decrease after proportional probe detects crossover");
     }
 
     #[test]

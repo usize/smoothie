@@ -23,7 +23,7 @@ filter_chains:
 
       - filter: smoothie
         ceiling_min: 1
-        ceiling_max: 128
+        ceiling_max: 64
         sensitivity: 0.10
         beta: 0.5
         hysteresis_steps: 3
@@ -34,4 +34,4 @@ filter_chains:
           - name: llm_backend
             read_timeout_ms: 120000
             endpoints:
-              - "127.0.0.1:8999"
+              - "127.0.0.1:8085"

@@ -70,6 +70,14 @@ MODELS: dict[str, dict] = {
         "weight_bytes": 2_000_000_000,
         "default_api_name": "qwen2.5:3b",
     },
+    "qwen3-8b": {
+        "params": 8_200_000_000,
+        "n_layers": 36,
+        "n_kv_heads": 8,
+        "d_head": 128,
+        "weight_bytes": 5_200_000_000,
+        "default_api_name": "qwen3:8b",
+    },
     "llama-3.2-1b": {
         "params": 1_240_000_000,
         "n_layers": 16,
