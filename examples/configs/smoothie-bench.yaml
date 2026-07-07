@@ -22,10 +22,11 @@ filter_chains:
             cluster: llm_backend
 
       - filter: smoothie
-        floor_tps: 12.0
-        headroom_ms: 10
-        ceiling_max: 64
-        ceiling_init: 8
+        floor_tps: 7.0
+        headroom_ms: 15
+        ceiling_min: 10
+        ceiling_max: 48
+        ceiling_init: 16
         beta: 0.8
         hysteresis_steps: 200
 
